@@ -1,0 +1,91 @@
+storage:
+  root: F:/weather_data
+  database: F:/weather_data/catalog.sqlite
+  temporary: F:/weather_data/staging
+
+network:
+  timeout_seconds: 120
+  retries: 4
+  delay_seconds: 0.3
+  user_agent: chmi-tisnov-research/1.0
+  concurrent_downloads: 3
+
+radar:
+  enabled: true
+  retention_days_on_server: 10
+
+  products:
+    maxz:
+      enabled: true
+      formats:
+        - hdf5
+      url: https://opendata.chmi.cz/meteorology/weather/radar/composite/maxz/hdf5/
+
+    pseudocappi2km:
+      enabled: true
+      formats:
+        - hdf5
+      url: https://opendata.chmi.cz/meteorology/weather/radar/composite/pseudocappi2km/hdf5/
+
+    merge1h:
+      enabled: true
+      formats:
+        - hdf5
+      url: https://opendata.chmi.cz/meteorology/weather/radar/composite/merge1h/hdf5/
+
+    echotop:
+      enabled: true
+      formats:
+        - hdf5
+      url: https://opendata.chmi.cz/meteorology/weather/radar/composite/echotop/hdf5/
+
+climate:
+  recent:
+    enabled: true
+    url: https://opendata.chmi.cz/meteorology/climate/recent/data/daily/
+    interval: daily
+    format: json
+    # Active stations surrounding Tišnov. Daily observations provide the
+    # broad regional context even where sub-hourly feeds are unavailable.
+    station_ids:
+      - '41501115001'  # Tišnov-Hájek
+      - '41501140001'  # Veverská Bítýška
+      - '41501142001'  # Kuřim
+      - '41501135001'  # Velká Bíteš
+      - '41502073001'  # Blansko
+      - '41502057001'  # Obora
+      - '41503007001'  # Zastávka
+
+  historical_csv:
+    enabled: true
+    url: https://opendata.chmi.cz/meteorology/climate/historical_csv/data/
+
+    intervals:
+      - 10min
+      - 1hour
+      - daily
+      - monthly
+
+station:
+  measurements:
+    10min:
+      enabled: true
+      url: https://opendata.chmi.cz/meteorology/climate/recent/data/10min/
+      format: json
+      station_ids:
+        - '41501115001'  # Tišnov-Hájek
+        - '41501135001'  # Velká Bíteš, west of Tišnov
+        - '41502057001'  # Obora, north-east control
+    1hour:
+      enabled: true
+      url: https://opendata.chmi.cz/meteorology/climate/recent/data/1hour/
+      format: json
+      station_ids:
+        - '41501115001'
+        - '41501135001'
+        - '41502057001'
+
+metadata:
+  climate:
+    enabled: true
+    url: https://opendata.chmi.cz/meteorology/climate/historical_csv/metadata/

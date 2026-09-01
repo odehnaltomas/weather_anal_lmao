@@ -1,0 +1,1 @@
+"""CHMI weather downloader package."""

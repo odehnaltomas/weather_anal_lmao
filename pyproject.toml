@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chmi-downloader"
+version = "0.1.0"
+description = "CHMI weather data downloader and analyzer"
+requires-python = ">=3.10"
+dependencies = [
+    "PyYAML>=6.0",
+    "requests>=2.31",
+    "filelock>=3.16",
+    "h5py>=3.11",
+    "numpy>=2.0",
+    "pyproj>=3.6",
+]
+
+[project.scripts]
+chmi-downloader = "chmi_downloader.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

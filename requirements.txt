@@ -1,0 +1,6 @@
+PyYAML>=6.0
+requests>=2.31
+filelock>=3.16
+h5py>=3.11
+numpy>=2.0
+pyproj>=3.6

@@ -43,3 +43,19 @@ def test_ingestion_service_emits_discovery_and_result_progress(tmp_path):
         'result',
     ]
     assert events[1]['count'] == 1
+
+
+def test_transfer_budget_defers_backfill_without_losing_archive_order(tmp_path):
+    db = Database(tmp_path / 'catalog.sqlite')
+    downloader = DummyDownloader()
+    downloader.discover_resource_files = lambda resource: [
+        {'name': name, 'url': 'https://example.test/' + name}
+        for name in ['newest', 'older', 'oldest']
+    ]
+    events = []
+    results = IngestionService(None, db, downloader).collect(
+        [{'product': 'additional', 'max_downloads_per_run': 2}], progress=events.append,
+    )
+    assert len(results) == 2
+    assert [item['name'] for item in downloader.calls] == ['newest', 'older']
+    assert events[-1] == {'event': 'deferred', 'product': 'additional', 'count': 1}

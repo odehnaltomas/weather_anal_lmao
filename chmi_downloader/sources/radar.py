@@ -30,6 +30,7 @@ class RadarResource(Resource):
                     # Radar indexes have short retention, so archive every
                     # listed file rather than selecting only the newest one.
                     'archive_all': True,
+                    'recursive': True,
                 })
         return resources
 

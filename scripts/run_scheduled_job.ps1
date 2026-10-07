@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('radar', 'daily', 'climate-recent', 'climate-historical', 'verify')]
+    [ValidateSet('radar', 'current', 'daily', 'climate-recent', 'climate-historical', 'verify')]
     [string]$Job,
 
     [Parameter(Mandatory = $true)]
@@ -27,23 +27,38 @@ function Write-JobLog {
         Out-File -LiteralPath $LogFile -Append -Encoding utf8
 }
 
+function Invoke-Downloader {
+    param([string[]]$CliArguments)
+    # Windows PowerShell 5.1 turns native stderr into error records. Log the
+    # full output and use the process exit code instead of aborting on stderr.
+    $ErrorActionPreference = 'Continue'
+    # Resumed daily/radar/maintenance tasks can start together. Give the current
+    # archive writer time to finish; a timeout still fails for scheduler retry.
+    & $PythonExe -m chmi_downloader.cli @CliArguments --lock-timeout 3600 2>&1 |
+        ForEach-Object {
+            "$_" | Out-File -LiteralPath $LogFile -Append -Encoding utf8 -ErrorAction Stop
+        }
+    return $LASTEXITCODE
+}
+
 try {
     Write-JobLog 'Starting scheduled job.'
+    $CurrentExitCode = 0
 
     if ($Job -eq 'verify') {
-        & $PythonExe -m chmi_downloader.cli verify 2>&1 |
-            ForEach-Object {
-                "$_" | Out-File -LiteralPath $LogFile -Append -Encoding utf8
-            }
+        $exitCode = Invoke-Downloader -CliArguments @('verify')
     }
     else {
-        & $PythonExe -m chmi_downloader.cli collect $Job 2>&1 |
-            ForEach-Object {
-                "$_" | Out-File -LiteralPath $LogFile -Append -Encoding utf8
-            }
+        if ($Job -eq 'radar') {
+            # Reuse the existing 30-minute task for short-retention feeds.
+            $CurrentExitCode = Invoke-Downloader -CliArguments @('collect', 'current')
+        }
+        $exitCode = Invoke-Downloader -CliArguments @('collect', $Job)
     }
 
-    $exitCode = $LASTEXITCODE
+    # Still attempt radar after a current-feed failure, but do not let radar's
+    # success conceal that failure from Task Scheduler's restart policy.
+    if ($CurrentExitCode -ne 0) { $exitCode = $CurrentExitCode }
     if ($exitCode -ne 0) {
         throw "Downloader exited with code $exitCode."
     }

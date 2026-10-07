@@ -36,6 +36,7 @@ from .sources.climate_recent import ClimateRecentResource
 from .sources.radar import RadarResource
 from .sources.station_measurements import StationMeasurementsResource
 from .sources.base import Resource
+from .sources.current import CurrentResource, MetadataResource
 from .validation import Validator
 
 
@@ -47,6 +48,10 @@ def print_collection_progress(event: dict[str, object]) -> None:
         print(f'[{product}] Reading CHMI index...', flush=True)
     elif event_type == 'discovered':
         print(f'[{product}] Found {event.get("count", 0)} remote files.', flush=True)
+        if not event.get('count'):
+            print(f'[{product}] WARNING: No files matched the configured source/stations.', flush=True)
+    elif event_type == 'deferred':
+        print(f'[{product}] Transfer limit reached; {event["count"]} remaining candidates deferred to the next run.', flush=True)
     elif event_type == 'result':
         result = event.get('result')
         if not isinstance(result, dict):
@@ -61,6 +66,8 @@ def print_collection_progress(event: dict[str, object]) -> None:
                 f'({result.get("size_bytes", 0)} bytes).',
                 flush=True,
             )
+            if result.get('format_changed'):
+                print(f'[{product}] FORMAT_CHANGED: saved separately in {result["path"]}', flush=True)
         elif status == 'failed':
             print(
                 f'[{product}]{position} FAILED: {result.get("reason", "unknown error")}',
@@ -76,6 +83,10 @@ def build_parser() -> argparse.ArgumentParser:
     """Build the public command/target interface used by scripts and users."""
     parser = argparse.ArgumentParser(description='CHMI weather downloader')
     parser.add_argument('--config', default=None, help='Path to config.yaml')
+    parser.add_argument(
+        '--lock-timeout', type=int, default=1,
+        help='Seconds to wait for another archive writer (default: 1).',
+    )
     parser.add_argument(
         '--details',
         action='store_true',
@@ -97,7 +108,7 @@ def build_parser() -> argparse.ArgumentParser:
         'target',
         nargs='?',
         default='all',
-        choices=['all', 'radar', 'daily', 'climate-recent', 'climate-historical', 'station'],
+        choices=['all', 'radar', 'current', 'metadata', 'daily', 'climate-recent', 'climate-historical', 'station'],
     )
     parser.add_argument('--latitude', type=float, default=49.348719)
     parser.add_argument('--longitude', type=float, default=16.424380)
@@ -117,7 +128,33 @@ def main() -> None:
     """Dispatch the requested CLI command."""
     parser = build_parser()
     args = parser.parse_args()
+    if args.lock_timeout < 0:
+        parser.error('--lock-timeout must be non-negative')
     config = Config(args.config)
+    if args.command in {'collect', 'retry', 'verify'}:
+        from filelock import FileLock, Timeout
+
+        config.storage_root().mkdir(parents=True, exist_ok=True)
+        lock_path = config.storage_root() / 'collector.lock'
+        print(f'Waiting for archive access (up to {args.lock_timeout} seconds).', flush=True)
+        try:
+            # Lock before catalog initialization as well as file writes. This
+            # also serializes simultaneous first-run schema migrations.
+            # Verification updates catalog status, so it shares the writer
+            # lock with collection and retry to avoid inspecting mid-refresh.
+            with FileLock(str(lock_path), timeout=args.lock_timeout):
+                run_command(args, config)
+        except Timeout:
+            # Exit nonzero so scheduled runners can request another attempt
+            # instead of silently losing a daily run after sleep/resume.
+            print('Another archive writer is still running; retry this job.', file=sys.stderr)
+            raise SystemExit(2) from None
+    else:
+        run_command(args, config)
+
+
+def run_command(args: argparse.Namespace, config: Config) -> None:
+    """Execute a command after acquiring the archive lock when needed."""
     database = Database(config.database_path())
     downloader = Downloader(config, database)
     ingestion = IngestionService(config, database, downloader)
@@ -129,9 +166,12 @@ def main() -> None:
             'all': [
                 RadarResource, ClimateRecentResource,
                 ClimateHistoricalResource, StationMeasurementsResource,
+                CurrentResource, MetadataResource,
             ],
             'radar': [RadarResource],
-            'daily': [ClimateRecentResource, StationMeasurementsResource],
+            'current': [CurrentResource],
+            'metadata': [MetadataResource],
+            'daily': [ClimateRecentResource, StationMeasurementsResource, MetadataResource],
             'climate-recent': [ClimateRecentResource],
             'climate-historical': [ClimateHistoricalResource],
             'station': [StationMeasurementsResource],
@@ -141,18 +181,9 @@ def main() -> None:
             for resource_cls in source_types[args.target]
             for item in resource_cls().discover(config.data)
         ]
-        from filelock import FileLock, Timeout
-        lock_path = config.storage_root() / 'collector.lock'
         print(f'Collecting target: {args.target}')
         print(f'Storage root: {config.storage_root()}')
-        try:
-            # Task Scheduler can accidentally overlap runs after sleep/resume.
-            # The file lock protects both SQLite and destination files.
-            with FileLock(str(lock_path), timeout=1):
-                results = ingestion.collect(resources, progress=print_collection_progress)
-        except Timeout:
-            print('Another collector instance is already running.', file=sys.stderr)
-            raise SystemExit(2) from None
+        results = ingestion.collect(resources, progress=print_collection_progress)
         counts = Counter(str(item.get('status', 'unknown')) for item in results)
         print('\nCollection summary:')
         print(f'  Remote files considered: {len(results)}')
@@ -233,13 +264,17 @@ def main() -> None:
                 'product': row['product'],
                 'url': row['remote_url'],
                 'observation_time_utc': row['observation_time_utc'],
-                'format': 'hdf5' if suffix in {'.hdf', '.h5', '.hdf5'} else 'json' if suffix == '.json' else 'csv',
+                'format': 'hdf5' if suffix in {'.hdf', '.h5', '.hdf5'} else 'json' if suffix == '.json' else 'csv' if suffix == '.csv' else None,
+                'refresh_existing': True,
+                'accept_changed_format': True,
             })
         for item in [downloader.download_resource(resource) for resource in resources]:
             print(item)
     elif args.command == 'analyze':
         analyzer = RadarAnalyzer()
         for row in database.list_remote_files():
+            if row['source'] != 'radar':
+                continue
             path = Path(str(row['file_path']))
             if path.exists():
                 print(analyzer.analyze(path, {'sha256': row['sha256']}))
@@ -281,7 +316,14 @@ def main() -> None:
         print(f'  JSON: {output}')
     elif args.command == 'verify':
         failed = 0
+        verified = 0
+        skipped_legacy = 0
         for row in database.list_remote_files():
+            # Early catalogs include failed/skipped discovery placeholders,
+            # not downloaded payloads. Do not label those as lost archives.
+            if not row.get('remote_url') and not row.get('sha256'):
+                skipped_legacy += 1
+                continue
             path = Path(str(row['file_path']))
             try:
                 metadata = Validator.validate_file(
@@ -290,6 +332,7 @@ def main() -> None:
                     expected_sha256=row['sha256'],
                 )
                 database.update_remote_file_status(str(path), 'verified')
+                verified += 1
                 print({'status': 'verified', 'path': str(path), **metadata})
             except Exception as exc:
                 failed += 1
@@ -297,6 +340,7 @@ def main() -> None:
                 # files may be redownloaded, while corrupt files need review.
                 database.update_remote_file_status(str(path), 'corrupt' if path.exists() else 'missing')
                 print({'status': 'failed', 'path': str(path), 'reason': str(exc)})
+        print(f'Verification summary: verified={verified}, failed={failed}, skipped legacy={skipped_legacy}')
         if failed:
             raise SystemExit(1)
 

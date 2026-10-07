@@ -28,6 +28,7 @@ class ClimateRecentResource(Resource):
             # Daily files represent a growing month and keep the same URL.
             # Refreshing them is required to receive newly appended days.
             'archive_all': True,
+            'recursive': True,
             'refresh_existing': True,
         }]
 

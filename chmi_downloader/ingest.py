@@ -48,9 +48,15 @@ class IngestionService:
                     'product': resource.get('product'),
                     'count': len(discovered),
                 })
+            # Budget download outcomes, not catalog comparisons: unchanged
+            # entries (including HTTP 304) should not prevent catching up.
+            # Failures consume budget too, so a broken feed cannot monopolize it.
+            transfers = 0
             for index, item in enumerate(discovered, start=1):
                 result = self.downloader.download_resource(item)
                 results.append(result)
+                if result.get('status') != 'already-downloaded':
+                    transfers += 1
                 # Already-downloaded rows are intentionally quiet except for
                 # periodic checkpoints; a radar archive contains thousands.
                 if progress and (
@@ -65,4 +71,12 @@ class IngestionService:
                         'total': len(discovered),
                         'result': result,
                     })
+                limit = resource.get('max_downloads_per_run')
+                if limit and transfers >= limit and index < len(discovered):
+                    # Leave the remaining candidates untouched. The next run
+                    # rediscovers them and skips copies already archived here.
+                    if progress:
+                        progress({'event': 'deferred', 'product': resource.get('product'),
+                                  'count': len(discovered) - index})
+                    break
         return results

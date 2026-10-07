@@ -27,9 +27,11 @@ class StationMeasurementsResource(Resource):
                 'url': interval_cfg.get('url', ''),
                 'interval': interval_name,
                 'station_ids': interval_cfg.get('station_ids', []),
-                # Daily station files are immutable and URL deduplication
-                # prevents repeated downloads on subsequent runs.
                 'archive_all': True,
+                'recursive': True,
+                # Nested monthly files can grow or be corrected at the same
+                # URL, so an existing catalog entry is not proof of freshness.
+                'refresh_existing': True,
             })
         return resources
 

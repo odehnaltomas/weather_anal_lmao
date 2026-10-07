@@ -61,7 +61,12 @@ class Validator:
             # Every HDF5 file begins with this fixed eight-byte signature.
             return header == b'\x89HDF\r\n\x1a\n'
         if expected_format.lower() == 'csv':
-            return path.suffix.lower() == '.csv' or b',' in path.read_bytes()[:1024]
+            # Staging files have a .part suffix; inspect the content instead
+            # of trusting the filename. This is only a basic format check.
+            prefix = path.read_bytes()[:4096].lstrip()
+            if prefix.lower().startswith((b'<html', b'<!doctype html')):
+                return False
+            return any(delimiter in prefix for delimiter in (b',', b';', b'\t'))
         if expected_format.lower() == 'json':
             try:
                 prefix = path.read_bytes()[:1024].lstrip()

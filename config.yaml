@@ -40,6 +40,16 @@ radar:
       url: https://opendata.chmi.cz/meteorology/weather/radar/composite/echotop/hdf5/
 
 climate:
+  # Current-day station files change in place; collect current refreshes them
+  # on the radar schedule and retains earlier payload versions.
+  now:
+    enabled: true
+    url: https://opendata.chmi.cz/meteorology/climate/now/data/
+    format: json
+    station_ids:
+      - '41501115001'
+      - '41501135001'
+      - '41502057001'
   recent:
     enabled: true
     url: https://opendata.chmi.cz/meteorology/climate/recent/data/daily/
@@ -65,6 +75,7 @@ climate:
       - 1hour
       - daily
       - monthly
+      - yearly
 
 station:
   measurements:
@@ -89,3 +100,38 @@ metadata:
   climate:
     enabled: true
     url: https://opendata.chmi.cz/meteorology/climate/historical_csv/metadata/
+  climate_now:
+    enabled: true
+    url: https://opendata.chmi.cz/meteorology/climate/now/metadata/
+  climate_recent:
+    enabled: true
+    url: https://opendata.chmi.cz/meteorology/climate/recent/metadata/
+
+# These raw feeds remain separate from the inputs used by the radar analysis.
+# Discovery retains all formats, including new extensions, under each subtree.
+# Each source defaults to max_downloads_per_run: 200 (0 removes the limit).
+# Older dated snapshots are rechecked daily; current-day files every run.
+additional_sources:
+  radiosounding_prostejov:
+    enabled: true
+    url: https://opendata.chmi.cz/meteorology/weather/radiosounding/Prostejov/recent/
+    format: auto
+  wind_profiles:
+    enabled: true
+    url: https://opendata.chmi.cz/meteorology/weather/wind_profiles/recent/
+    format: auto
+  satellite_ir108BT:
+    enabled: true
+    url: https://opendata.chmi.cz/meteorology/weather/satellite/geo/ir108BT/
+    filename_pattern: '_cz[.]'
+    format: auto
+  satellite_wv062:
+    enabled: true
+    url: https://opendata.chmi.cz/meteorology/weather/satellite/geo/wv062/
+    filename_pattern: '_cz[.]'
+    format: auto
+  satellite_airmass:
+    enabled: true
+    url: https://opendata.chmi.cz/meteorology/weather/satellite/geo/airmass/
+    filename_pattern: '_cz[.]'
+    format: auto

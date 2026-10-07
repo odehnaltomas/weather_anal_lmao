@@ -49,9 +49,14 @@ function New-JobAction {
 
 # IgnoreNew complements the application's collector.lock. If a slow download
 # is still running, Task Scheduler will not start a competing process.
+# IgnoreNew applies within one task; the Python lock coordinates different
+# tasks. Restart settings recover failures after that bounded wait or a network
+# outage without waiting for the next day's regular trigger.
 $Settings = New-ScheduledTaskSettingsSet `
     -StartWhenAvailable `
     -MultipleInstances IgnoreNew `
+    -RestartCount 6 `
+    -RestartInterval (New-TimeSpan -Minutes 10) `
     -ExecutionTimeLimit (New-TimeSpan -Hours 4)
 $Principal = New-ScheduledTaskPrincipal `
     -UserId $CurrentUser `

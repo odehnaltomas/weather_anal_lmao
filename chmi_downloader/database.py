@@ -58,6 +58,8 @@ class Database:
                 'downloaded_at': 'TEXT',
                 'verified_at': 'TEXT',
                 'last_error': 'TEXT',
+                'etag': 'TEXT',
+                'checked_at': 'TEXT',
             }
             for column, definition in migrations.items():
                 if column not in existing:
@@ -66,6 +68,18 @@ class Database:
                 'CREATE UNIQUE INDEX IF NOT EXISTS idx_remote_files_url '
                 'ON remote_files(remote_url) WHERE remote_url IS NOT NULL'
             )
+            # remote_files holds the current copy for each URL; this separate
+            # ledger keeps earlier payloads discoverable after a refresh.
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS file_versions (
+                    remote_url TEXT NOT NULL,
+                    sha256 TEXT NOT NULL,
+                    file_path TEXT NOT NULL,
+                    size_bytes INTEGER NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (remote_url, sha256)
+                )
+            ''')
             conn.commit()
 
     def ensure_status(self, status: str) -> int:
@@ -107,6 +121,17 @@ class Database:
                     'SELECT id FROM remote_files WHERE remote_url = ?', (remote_url,)
                 ).fetchone()
                 if existing is not None:
+                    if status == 'failed':
+                        # A failed refresh must not erase the last good copy.
+                        saved = conn.execute(
+                            'SELECT sha256 FROM remote_files WHERE id = ?', existing
+                        ).fetchone()
+                        if saved[0]:
+                            conn.execute(
+                                'UPDATE remote_files SET last_error = ?, attempts = attempts + 1 WHERE id = ?',
+                                (last_error, existing[0]),
+                            )
+                            return int(existing[0])
                     conn.execute(
                         '''
                         UPDATE remote_files
@@ -165,7 +190,37 @@ class Database:
 
     def failed_files(self) -> list[dict[str, object]]:
         """Return rows eligible for the retry command."""
-        return self.list_remote_files(status='failed')
+        # Refresh errors coexist with a downloaded/verified status so callers
+        # can still use the last good copy while retrying the remote request.
+        return [row for row in self.list_remote_files()
+                if row['status'] == 'failed' or row.get('last_error')]
+
+    def remote_file(self, url: str) -> dict | None:
+        """Read the current payload and refresh metadata for one exact URL."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute('SELECT * FROM remote_files WHERE remote_url = ?', (url,)).fetchone()
+            return dict(row) if row else None
+
+    def remember_version(self, url: str, sha256: str, path: Path, size: int) -> None:
+        """Record each distinct payload once, retaining its first archive path."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                'INSERT OR IGNORE INTO file_versions(remote_url, sha256, file_path, size_bytes) VALUES (?, ?, ?, ?)',
+                (url, sha256, str(path), size),
+            )
+
+    def set_http_metadata(self, url: str, headers: dict) -> None:
+        """Mark a successful check without changing the payload download time.
+
+        A 304 or identical payload can advance checked_at without a new file.
+        Clearing last_error also removes recovered refreshes from the retry set.
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                'UPDATE remote_files SET etag = ?, remote_modified = ?, checked_at = ?, last_error = NULL WHERE remote_url = ?',
+                (headers.get('ETag'), headers.get('Last-Modified'), datetime.now(timezone.utc).isoformat(), url),
+            )
 
     def radar_files(self, product: str) -> list[dict[str, object]]:
         """Return readable catalog entries for one radar product in time order."""
